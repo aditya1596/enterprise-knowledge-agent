@@ -24,6 +24,7 @@ def _path(env_var: str, default: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     # Models
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     llm_model: str = os.getenv("LLM_MODEL", "qwen2.5:3b")
     eval_model: str = os.getenv("EVAL_MODEL", os.getenv("LLM_MODEL", "qwen2.5:3b"))
     # Text-to-SQL is the hardest task in the pipeline for a small model;

@@ -10,27 +10,30 @@ from typing import Literal
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 
 from ..config import settings
 
 
+# --------------------------------------------------------------------------
+# Base LLMs
+# --------------------------------------------------------------------------
 @lru_cache(maxsize=1)
-def get_llm() -> ChatOllama:
-    return ChatOllama(
+def get_llm() -> ChatGroq:
+    return ChatGroq(
         model=settings.llm_model,
-        base_url=settings.ollama_base_url,
+        api_key=settings.groq_api_key,
         temperature=settings.temperature,
     )
 
 
 @lru_cache(maxsize=1)
-def get_sql_llm() -> ChatOllama:
+def get_sql_llm() -> ChatGroq:
     """LLM for text-to-SQL, optionally a larger model than the agent's."""
-    return ChatOllama(
+    return ChatGroq(
         model=settings.sql_model,
-        base_url=settings.ollama_base_url,
+        api_key=settings.groq_api_key,
         temperature=settings.temperature,
     )
 
@@ -50,32 +53,69 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are an expert at routing a user question to one data source:\n"
+            "You are an expert at routing a user question to one data source.\n"
             '- "vectorstore": {kb_description}\n'
             '- "sql": {sql_description}\n'
             '- "web_search": current events, recent facts, or anything not '
-            "covered by the other two sources.\n"
-            "Pick the single best datasource for the question.",
+            "covered by the other two sources.\n\n"
+            "Choose exactly ONE datasource.\n"
+            "Return ONLY one of these exact words:\n"
+            "vectorstore\n"
+            "web_search\n"
+            "sql\n\n"
+            "Do not explain your choice.",
         ),
         ("human", "{question}"),
     ]
-).partial(kb_description=settings.kb_description, sql_description=settings.sql_description)
+).partial(
+    kb_description=settings.kb_description,
+    sql_description=settings.sql_description,
+)
+
+
+def _parse_route(text: str) -> RouteQuery:
+    """Convert the router's plain-text response into RouteQuery."""
+
+    value = text.strip().lower()
+
+    if "vectorstore" in value:
+        return RouteQuery(datasource="vectorstore")
+
+    if "web_search" in value:
+        return RouteQuery(datasource="web_search")
+
+    if "sql" in value:
+        return RouteQuery(datasource="sql")
+
+    # Safe fallback if the model returns something unexpected.
+    return RouteQuery(datasource="vectorstore")
 
 
 @lru_cache(maxsize=1)
 def get_router():
-    return ROUTER_PROMPT | get_llm().with_structured_output(RouteQuery)
+    """Router without tool calling.
+
+    Using plain text avoids Groq's 'Tool choice is required, but model did
+    not call a tool' error caused by structured output/tool calling.
+    """
+    return (
+        ROUTER_PROMPT
+        | get_llm()
+        | StrOutputParser()
+        | _parse_route
+    )
 
 
 # --------------------------------------------------------------------------
-# Graders. They reason briefly before giving a verdict: forcing a small CPU
-# model to answer yes/no in one token makes it fail on hard content (e.g.
-# documents that themselves talk about grading), while a short reasoning
-# step followed by "VERDICT: yes|no" is reliable.
+# Graders
 # --------------------------------------------------------------------------
 def parse_verdict(text: str, default: str) -> str:
     """Extract the final yes/no verdict from a grader response."""
-    match = re.search(r"verdict\s*:\s*\**\s*(yes|no)", text, re.IGNORECASE)
+    match = re.search(
+        r"verdict\s*:\s*\**\s*(yes|no)",
+        text,
+        re.IGNORECASE,
+    )
     return match.group(1).lower() if match else default
 
 
@@ -91,7 +131,8 @@ DOC_GRADER_PROMPT = ChatPromptTemplate.from_messages(
         ),
         (
             "human",
-            "<document>\n{document}\n</document>\n\nQuestion: {question}\n\n"
+            "<document>\n{document}\n</document>\n\n"
+            "Question: {question}\n\n"
             "Does the document discuss or mention any concept from the "
             "question? Think briefly, then end your response with "
             "'VERDICT: yes' or 'VERDICT: no'.",
@@ -112,6 +153,9 @@ def get_document_grader():
     )
 
 
+# --------------------------------------------------------------------------
+# Grounding grader
+# --------------------------------------------------------------------------
 GROUNDING_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -123,7 +167,8 @@ GROUNDING_PROMPT = ChatPromptTemplate.from_messages(
         ),
         (
             "human",
-            "<facts>\n{documents}\n</facts>\n\nAnswer: {generation}\n\n"
+            "<facts>\n{documents}\n</facts>\n\n"
+            "Answer: {generation}\n\n"
             "Is the answer grounded in the facts? Think briefly, then end "
             "your response with 'VERDICT: yes' or 'VERDICT: no'.",
         ),
@@ -144,7 +189,7 @@ def get_grounding_grader():
 
 
 # --------------------------------------------------------------------------
-# Question rewriter: improve the query when retrieval fails
+# Question rewriter
 # --------------------------------------------------------------------------
 REWRITER_PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -155,7 +200,11 @@ REWRITER_PROMPT = ChatPromptTemplate.from_messages(
             "acronyms, add synonyms or make the intent explicit. Return ONLY "
             "the rewritten query, in the same language as the original.",
         ),
-        ("human", "Original question: {original_question}\nPrevious query: {question}"),
+        (
+            "human",
+            "Original question: {original_question}\n"
+            "Previous query: {question}",
+        ),
     ]
 )
 

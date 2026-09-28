@@ -4,6 +4,7 @@ import logging
 import re
 from functools import lru_cache
 
+from groq import BadRequestError
 from langchain_community.utilities import SQLDatabase
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
@@ -75,9 +76,27 @@ def run_sql_question(question: str, llm, max_attempts: int = 3) -> Document:
     failure = "no query generated"
     sql = ""
     for attempt in range(1, max_attempts + 1):
-        sql = chain.invoke(
-            {"schema": schema, "question": question, "feedback": feedback}
-        ).query
+        try:
+            sql = chain.invoke(
+                {"schema": schema, "question": question, "feedback": feedback}
+            ).query
+        except BadRequestError as exc:
+            logger.info("SQL generation failed (attempt %d): %s", attempt, exc)
+            failure = "the model did not return a query"
+            # Retry, unless the question itself asks to modify data
+            if attempt < max_attempts and not FORBIDDEN.search(question):
+                feedback = (
+                    "\n\nYou must respond by calling the SQLQuery tool with a "
+                    "single SELECT statement. Do not write prose or markdown."
+                )
+                continue
+            return Document(
+                page_content="SQL query:\n(none generated)\n\n"
+                "Result:\nThe model did not produce a query for this request. "
+                "Only read-only SELECT queries are supported, so requests "
+                "that modify data are not executed.",
+                metadata={"source": "sql", "query": ""},
+            )
         logger.info("Generated SQL (attempt %d): %s", attempt, sql)
 
         if not is_safe_select(sql):
