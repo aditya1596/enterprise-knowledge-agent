@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY}
+    volumes:
+      - chroma:/app/.chroma
+
+volumes:
+  chroma:
