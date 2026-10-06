@@ -5,7 +5,7 @@ description = "Multi-source agentic RAG built with LangGraph: adaptive routing, 
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-authors = [{ name = "Andrea" }]
+authors = [{ name = "Aditya Singh" }]
 keywords = ["agentic-rag", "langchain", "agents", "groq", "ragas"]
 
 dependencies = [
